@@ -1,6 +1,6 @@
 use crate::{
-    error::*, ColumnTrait, ConnectionTrait, EntityTrait, FromQueryResult, Select, SelectModel,
-    SelectTwo, SelectTwoModel, Selector, SelectorTrait,
+    error::*, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QuerySelect,
+    Select, SelectModel, SelectTwo, SelectTwoModel, Selector, SelectorTrait,
 };
 use sea_query::SelectStatement;
 
@@ -24,10 +24,26 @@ impl<'db, C> Aggregator<'db, C>
 where
     C: ConnectionTrait,
 {
-    pub fn count<T>(col: T) -> Result<i64, DbErr>
+    pub async fn count<T>(&self, col: T) -> Result<i64, DbErr>
     where
         T: ColumnTrait,
     {
+        let builder = self.db.get_database_backend();
+        let stmt = builder.build(
+            SelectStatement::new()
+                .expr(col.count())
+                .from(col.entity_name()),
+        );
+
+        let result = match self.db.query_one(stmt).await? {
+            Some(res) => res,
+            None => return Ok(0),
+        };
+        let count = match builder {
+            DbBackend::Postgres => result.try_get::<i64>("")?,
+            _ => result.try_get::<i64>("")?,
+        };
+        Ok(count)
     }
 }
 
@@ -37,7 +53,10 @@ where
     S: SelectorTrait + Send + Sync + 'db,
 {
     fn aggregate(self, db: &'db C) -> Aggregator<'db, C> {
-        todo!()
+        Aggregator {
+            query: self.query,
+            db,
+        }
     }
 }
 
