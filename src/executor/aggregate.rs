@@ -12,7 +12,7 @@ where
     fn aggregate(self, db: &'db C) -> Aggregator<'db, C>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Aggregator<'db, C>
 where
     C: ConnectionTrait,
@@ -68,8 +68,11 @@ where
     C: ConnectionTrait,
     E: EntityTrait<Model = M>,
 {
-    fn aggregate(self, db: &'db C) -> Aggregator<'db, C> {
-        todo!()
+    fn aggregate(self, db: &'db C) -> Aggregator<C> {
+        Aggregator {
+            query: self.query,
+            db,
+        }
     }
 }
 
@@ -81,7 +84,10 @@ where
     M: FromQueryResult + Sized + Send + Sync + 'db,
     N: FromQueryResult + Sized + Send + Sync + 'db,
 {
-    fn aggregate(self, db: &'db C) -> Aggregator<'db, C> {
-        todo!()
+    fn aggregate(self, db: &'db C) -> Aggregator<C> {
+        Aggregator {
+            query: self.query,
+            db,
+        }
     }
 }
