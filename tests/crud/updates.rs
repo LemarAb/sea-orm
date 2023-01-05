@@ -1,6 +1,6 @@
 pub use super::*;
 use rust_decimal_macros::dec;
-use sea_orm::{query::*, DbErr};
+use sea_orm::{query::*, AggregatorTrait, DbErr};
 use uuid::Uuid;
 
 pub async fn test_update_cake(db: &DbConn) {
@@ -22,7 +22,7 @@ pub async fn test_update_cake(db: &DbConn) {
         bakery_id: Set(Some(bakery_insert_res.last_insert_id as i32)),
         ..Default::default()
     };
-
+    let cake_count_res = Cake::find().aggregate(db).count(bakery::Column::Name);
     let cake_insert_res = Cake::insert(mud_cake)
         .exec(db)
         .await

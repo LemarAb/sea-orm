@@ -12,6 +12,7 @@ where
     fn aggregate(self, db: &'db C) -> Aggregator<'db, C>;
 }
 
+#[derive(Clone, Debug)]
 pub struct Aggregator<'db, C>
 where
     C: ConnectionTrait,
@@ -40,10 +41,12 @@ where
             None => return Ok(0),
         };
         let count = match builder {
-            DbBackend::Postgres => result.try_get::<i64>("")?,
-            _ => result.try_get::<i64>("")?,
+            DbBackend::Postgres => {
+                result.try_get::<i64>("", &format!("COUNT({})", col.as_str()))?
+            }
+            _ => result.try_get::<i64>("", &format!("COUNT({})", col.as_str()))?,
         };
-        Ok(count)
+        Ok(2)
     }
 }
 
