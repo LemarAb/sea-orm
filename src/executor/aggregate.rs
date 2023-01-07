@@ -42,9 +42,9 @@ where
         };
         let count = match builder {
             DbBackend::Postgres => {
-                result.try_get::<i64>("", &format!("COUNT({})", col.as_str()))?
+                result.try_get::<i64>("", &format!("COUNT({})", col.to_string()))?
             }
-            _ => result.try_get::<i64>("", &format!("COUNT({})", col.as_str()))?,
+            _ => result.try_get::<i64>("", &format!("COUNT({})", col.to_string()))?,
         };
         Ok(2)
     }
@@ -67,8 +67,9 @@ impl<'db, C, E, M> AggregatorTrait<'db, C> for Select<E>
 where
     C: ConnectionTrait,
     E: EntityTrait<Model = M>,
+    M: FromQueryResult + Sized + Send + Sync + 'db,
 {
-    fn aggregate(self, db: &'db C) -> Aggregator<C> {
+    fn aggregate(self, db: &'db C) -> Aggregator<'db, C> {
         Aggregator {
             query: self.query,
             db,
@@ -84,7 +85,7 @@ where
     M: FromQueryResult + Sized + Send + Sync + 'db,
     N: FromQueryResult + Sized + Send + Sync + 'db,
 {
-    fn aggregate(self, db: &'db C) -> Aggregator<C> {
+    fn aggregate(self, db: &'db C) -> Aggregator<'db, C> {
         Aggregator {
             query: self.query,
             db,
