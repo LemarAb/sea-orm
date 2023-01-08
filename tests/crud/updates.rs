@@ -22,10 +22,6 @@ pub async fn test_update_cake(db: &DbConn) {
         bakery_id: Set(Some(bakery_insert_res.last_insert_id as i32)),
         ..Default::default()
     };
-    let aggreh = Cake::find().aggregate(db);
-
-    let cake_count_res = aggreh.count(cake::Column::Name);
-    let cake_count_res2 = Cake::find().aggregate().count(cake::Column::Name);
 
     let cake_insert_res = Cake::insert(mud_cake)
         .exec(db)
@@ -36,6 +32,8 @@ pub async fn test_update_cake(db: &DbConn) {
         .one(db)
         .await
         .expect("could not find cake");
+
+    let count = Cake::find().aggregate(db).count(cake::Column::Name).await;
 
     assert!(cake.is_some());
     let cake_model = cake.unwrap();

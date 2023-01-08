@@ -5,13 +5,14 @@ use crate::{
 use sea_query::SelectStatement;
 
 #[async_trait::async_trait]
+/// A Trait for any type that can paginate results
 pub trait AggregatorTrait<'db, C>
 where
     C: ConnectionTrait,
 {
     fn aggregate(self, db: &'db C) -> Aggregator<'db, C>;
 }
-
+/// Defined a structure to streamline aggregation queries
 #[derive(Debug)]
 pub struct Aggregator<'db, C>
 where
@@ -25,6 +26,7 @@ impl<'db, C> Aggregator<'db, C>
 where
     C: ConnectionTrait,
 {
+    /// Defined a structure to handle pagination of a result from a query operation on a Model
     pub async fn count<T>(&self, col: T) -> Result<i64, DbErr>
     where
         T: ColumnTrait,
@@ -42,9 +44,9 @@ where
         };
         let count = match builder {
             DbBackend::Postgres => {
-                result.try_get::<i64>("", &format!("COUNT({})", col.to_string()))?
+                result.try_get::<i64>("", &format!("COUNT ({})", col.to_string()))?
             }
-            _ => result.try_get::<i64>("", &format!("COUNT({})", col.to_string()))?,
+            _ => result.try_get::<i64>("", &format!("COUNT ({})", col.to_string()))?,
         };
         Ok(2)
     }
