@@ -2,7 +2,7 @@ use crate::{
     error::*, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QuerySelect,
     Select, SelectModel, SelectTwo, SelectTwoModel, Selector, SelectorTrait,
 };
-use sea_query::SelectStatement;
+use sea_query::{Alias, SelectStatement};
 
 #[async_trait::async_trait]
 /// A Trait for any type that can paginate results
@@ -27,29 +27,28 @@ where
     C: ConnectionTrait,
 {
     /// Defined a structure to handle pagination of a result from a query operation on a Model
-    pub async fn count<T>(&self, col: T) -> Result<i64, DbErr>
+    pub fn count<T>(&mut self, col: T) -> &mut Aggregator<'db, C>
     where
         T: ColumnTrait,
     {
-        let builder = self.db.get_database_backend();
-        let stmt = builder.build(
-            SelectStatement::new()
-                .expr(col.count())
-                .from(col.entity_name()),
-        );
-
-        let result = match self.db.query_one(stmt).await? {
-            Some(res) => res,
-            None => return Ok(0),
-        };
-        let count = match builder {
-            DbBackend::Postgres => {
-                result.try_get::<i64>("", &format!("COUNT ({})", col.to_string()))?
-            }
-            _ => result.try_get::<i64>("", &format!("COUNT ({})", col.to_string()))?,
-        };
-        Ok(2)
+        let select = SelectStatement::new()
+            .expr(col.count())
+            .from_subquery(self.query.to_owned(), Alias::new("sub_query"))
+            .to_owned();
+        self.query = select;
+        self
     }
+    // let result = match self.db.query_one(stmt).await? {
+    //     Some(res) => res,
+    //     None => return Ok(0),
+    // };
+    // let count = match builder {
+    //     DbBackend::Postgres => {
+    //         result.try_get::<i64>("", &format!("COUNT ({})", col.to_string()))?
+    //     }
+    //     _ => result.try_get::<i64>("", &format!("COUNT ({})", col.to_string()))?,
+    // };
+    // Ok(2)
 }
 
 impl<'db, C, S> AggregatorTrait<'db, C> for Selector<S>

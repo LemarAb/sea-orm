@@ -33,7 +33,11 @@ pub async fn test_update_cake(db: &DbConn) {
         .await
         .expect("could not find cake");
 
-    let count = Cake::find().aggregate(db).count(cake::Column::Name).await;
+    let count = Cake::find()
+        .column(cake::Column::Name)
+        .aggregate(db)
+        .count(cake::Column::Name)
+        .count(cake::Column::Name);
 
     assert!(cake.is_some());
     let cake_model = cake.unwrap();
