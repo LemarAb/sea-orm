@@ -29,7 +29,9 @@ where
     where
         C: ConnectionTrait,
     {
-        let result = match db.query_one(self.query).await? {
+        let builder = db.get_database_backend();
+        let stmt = builder.build(&self.query);
+        let result = match db.query_one(stmt).await? {
             Some(res) => res,
             None => return Ok(0),
         };
