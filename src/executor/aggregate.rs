@@ -4,7 +4,6 @@ use crate::{
 };
 use sea_query::{Alias, SelectStatement};
 
-#[async_trait::async_trait]
 /// A Trait for any type that can paginate results
 pub trait AggregatorTrait<'db, C>
 where
@@ -26,6 +25,19 @@ impl<'db, C> Aggregator<'db, C>
 where
     C: ConnectionTrait,
 {
+    pub async fn one<'a, C>(self, db: &C) -> Result<i64, DbErr>
+    where
+        C: ConnectionTrait,
+    {
+        let result = match db.query_one(self.query).await? {
+            Some(res) => res,
+            None => return Ok(0),
+        };
+        let aggregate =  result.try_get::<i64>("", "sub_query")?;
+        Ok(aggregate)
+    }
+
+
     /// Defined a structure to handle pagination of a result from a query operation on a Model
     pub fn count<T>(&mut self, col: T) -> &mut Aggregator<'db, C>
     where
@@ -38,17 +50,6 @@ where
         self.query = select;
         self
     }
-    // let result = match self.db.query_one(stmt).await? {
-    //     Some(res) => res,
-    //     None => return Ok(0),
-    // };
-    // let count = match builder {
-    //     DbBackend::Postgres => {
-    //         result.try_get::<i64>("", &format!("COUNT ({})", col.to_string()))?
-    //     }
-    //     _ => result.try_get::<i64>("", &format!("COUNT ({})", col.to_string()))?,
-    // };
-    // Ok(2)
 }
 
 impl<'db, C, S> AggregatorTrait<'db, C> for Selector<S>
