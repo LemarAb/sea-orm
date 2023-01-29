@@ -35,10 +35,9 @@ where
             Some(res) => res,
             None => return Ok(0),
         };
-        let aggregate =  result.try_get::<i64>("", "sub_query")?;
+        let aggregate = result.try_get::<i64>("", "sub_query")?;
         Ok(aggregate)
     }
-
 
     /// Defined a structure to handle pagination of a result from a query operation on a Model
     pub fn count<T>(&mut self, col: T) -> &mut Aggregator<'db, C>
@@ -51,6 +50,17 @@ where
             .to_owned();
         self.query = select;
         self
+    }
+}
+
+impl<'db, C> QuerySelect for Aggregator<'db, C>
+where
+     C: ConnectionTrait
+{
+    type QueryStatement = SelectStatement;
+
+    fn query(&mut self) -> &mut SelectStatement {
+        &mut self.query
     }
 }
 
