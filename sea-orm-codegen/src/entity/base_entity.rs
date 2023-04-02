@@ -1,4 +1,4 @@
-use heck::{CamelCase, SnakeCase};
+use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, TokenStream};
 use quote::format_ident;
 use quote::quote;
@@ -23,7 +23,7 @@ impl Entity {
     }
 
     pub fn get_table_name_camel_case(&self) -> String {
-        self.table_name.to_camel_case()
+        self.table_name.to_upper_camel_case()
     }
 
     pub fn get_table_name_snake_case_ident(&self) -> Ident {
@@ -144,17 +144,17 @@ impl Entity {
             .collect()
     }
 
-    pub fn get_conjunct_relations_to_camel_case(&self) -> Vec<Ident> {
+    pub fn get_conjunct_relations_to_upper_camel_case(&self) -> Vec<Ident> {
         self.conjunct_relations
             .iter()
-            .map(|con_rel| con_rel.get_to_camel_case())
+            .map(|con_rel| con_rel.get_to_upper_camel_case())
             .collect()
     }
 
     pub fn get_eq_needed(&self) -> TokenStream {
-        fn is_floats(col_type: &sea_query::ColumnType) -> bool {
+        fn is_floats(col_type: &ColumnType) -> bool {
             match col_type {
-                ColumnType::Float(_) | ColumnType::Double(_) => true,
+                ColumnType::Float | ColumnType::Double => true,
                 ColumnType::Array(col_type) => is_floats(col_type),
                 _ => false,
             }
@@ -165,6 +165,24 @@ impl Entity {
             // check if float or double exist.
             // if exist, return nothing
             .map_or(quote! {, Eq}, |_| quote! {})
+    }
+
+    pub fn get_column_serde_attributes(
+        &self,
+        serde_skip_deserializing_primary_key: bool,
+        serde_skip_hidden_column: bool,
+    ) -> Vec<TokenStream> {
+        self.columns
+            .iter()
+            .map(|col| {
+                let is_primary_key = self.primary_keys.iter().any(|pk| pk.name == col.name);
+                col.get_serde_attribute(
+                    is_primary_key,
+                    serde_skip_deserializing_primary_key,
+                    serde_skip_hidden_column,
+                )
+            })
+            .collect()
     }
 }
 
@@ -181,7 +199,7 @@ mod tests {
             columns: vec![
                 Column {
                     name: "id".to_owned(),
-                    col_type: ColumnType::Integer(None),
+                    col_type: ColumnType::Integer,
                     auto_increment: false,
                     not_null: false,
                     unique: false,
@@ -204,6 +222,7 @@ mod tests {
                     on_update: Some(ForeignKeyAction::Cascade),
                     self_referencing: false,
                     num_suffix: 0,
+                    impl_related: true,
                 },
                 Relation {
                     ref_table: "filling".to_owned(),
@@ -214,6 +233,7 @@ mod tests {
                     on_update: Some(ForeignKeyAction::Cascade),
                     self_referencing: false,
                     num_suffix: 0,
+                    impl_related: true,
                 },
             ],
             conjunct_relations: vec![],
@@ -427,15 +447,15 @@ mod tests {
     }
 
     #[test]
-    fn test_get_conjunct_relations_to_camel_case() {
+    fn test_get_conjunct_relations_to_upper_camel_case() {
         let entity = setup();
 
         for (i, elem) in entity
-            .get_conjunct_relations_to_camel_case()
+            .get_conjunct_relations_to_upper_camel_case()
             .into_iter()
             .enumerate()
         {
-            assert_eq!(elem, entity.conjunct_relations[i].get_to_camel_case());
+            assert_eq!(elem, entity.conjunct_relations[i].get_to_upper_camel_case());
         }
     }
 
