@@ -37,7 +37,7 @@ pub async fn test_update_cake(db: &DbConn) {
         .column(cake::Column::Name)
         .aggregate(db)
         .count(cake::Column::Name)
-        .count(cake::Column::Name);
+        .one(&mut db.get_database_backend());
 
     assert!(cake.is_some());
     let cake_model = cake.unwrap();
