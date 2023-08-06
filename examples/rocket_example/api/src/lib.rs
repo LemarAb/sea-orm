@@ -8,7 +8,7 @@ use rocket::request::FlashMessage;
 use rocket::response::{Flash, Redirect};
 use rocket::{Build, Request, Rocket};
 use rocket_dyn_templates::Template;
-use rocket_example_core::{Mutation, Query};
+use rocket_example_service::{Mutation, Query};
 use serde_json::json;
 
 use migration::MigratorTrait;
@@ -166,6 +166,6 @@ pub fn main() {
     println!("Rocket: deorbit.");
 
     if let Some(err) = result.err() {
-        println!("Error: {}", err);
+        println!("Error: {err}");
     }
 }

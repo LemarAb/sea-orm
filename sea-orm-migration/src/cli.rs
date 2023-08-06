@@ -77,8 +77,9 @@ where
         Some(MigrateSubcommands::Init) => run_migrate_init(MIGRATION_DIR)?,
         Some(MigrateSubcommands::Generate {
             migration_name,
-            universal_time,
-        }) => run_migrate_generate(MIGRATION_DIR, &migration_name, universal_time)?,
+            universal_time: _,
+            local_time,
+        }) => run_migrate_generate(MIGRATION_DIR, &migration_name, !local_time)?,
         _ => M::up(db, None).await?,
     };
 
@@ -86,13 +87,12 @@ where
 }
 
 #[derive(Parser)]
-#[clap(version)]
+#[command(version)]
 pub struct Cli {
-    #[clap(action, short = 'v', long, global = true, help = "Show debug messages")]
+    #[arg(short = 'v', long, global = true, help = "Show debug messages")]
     verbose: bool,
 
-    #[clap(
-        value_parser,
+    #[arg(
         global = true,
         short = 's',
         long,
@@ -103,8 +103,7 @@ pub struct Cli {
     )]
     database_schema: Option<String>,
 
-    #[clap(
-        value_parser,
+    #[arg(
         global = true,
         short = 'u',
         long,
@@ -113,7 +112,7 @@ pub struct Cli {
     )]
     database_url: Option<String>,
 
-    #[clap(subcommand)]
+    #[command(subcommand)]
     command: Option<MigrateSubcommands>,
 }
 
@@ -121,6 +120,6 @@ fn handle_error<E>(error: E)
 where
     E: Display,
 {
-    eprintln!("{}", error);
+    eprintln!("{error}");
     exit(1);
 }

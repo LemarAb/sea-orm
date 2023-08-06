@@ -2,7 +2,7 @@ pub mod common;
 
 pub use common::{features::*, setup::*, TestContext};
 use pretty_assertions::assert_eq;
-use sea_orm::{entity::prelude::*, FromQueryResult};
+use sea_orm::{entity::prelude::*, DerivePartialModel, FromQueryResult};
 use serde_json::json;
 
 #[sea_orm_macros::test]
@@ -34,7 +34,7 @@ pub async fn create_insert_default(db: &DatabaseConnection) -> Result<(), DbErr>
 
     assert_eq!(
         Entity::find().all(db).await?,
-        vec![
+        [
             Model { id: 1 },
             Model { id: 2 },
             Model { id: 3 },
@@ -62,7 +62,7 @@ pub async fn cursor_pagination(db: &DatabaseConnection) -> Result<(), DbErr> {
 
     assert_eq!(
         cursor.first(4).all(db).await?,
-        vec![
+        [
             Model { id: 1 },
             Model { id: 2 },
             Model { id: 3 },
@@ -72,7 +72,7 @@ pub async fn cursor_pagination(db: &DatabaseConnection) -> Result<(), DbErr> {
 
     assert_eq!(
         cursor.first(5).all(db).await?,
-        vec![
+        [
             Model { id: 1 },
             Model { id: 2 },
             Model { id: 3 },
@@ -82,7 +82,7 @@ pub async fn cursor_pagination(db: &DatabaseConnection) -> Result<(), DbErr> {
 
     assert_eq!(
         cursor.last(4).all(db).await?,
-        vec![
+        [
             Model { id: 1 },
             Model { id: 2 },
             Model { id: 3 },
@@ -92,7 +92,7 @@ pub async fn cursor_pagination(db: &DatabaseConnection) -> Result<(), DbErr> {
 
     assert_eq!(
         cursor.last(5).all(db).await?,
-        vec![
+        [
             Model { id: 1 },
             Model { id: 2 },
             Model { id: 3 },
@@ -108,7 +108,7 @@ pub async fn cursor_pagination(db: &DatabaseConnection) -> Result<(), DbErr> {
 
     assert_eq!(
         cursor.first(4).all(db).await?,
-        vec![
+        [
             Model { id: 6 },
             Model { id: 7 },
             Model { id: 8 },
@@ -118,7 +118,7 @@ pub async fn cursor_pagination(db: &DatabaseConnection) -> Result<(), DbErr> {
 
     assert_eq!(
         cursor.first(5).all(db).await?,
-        vec![
+        [
             Model { id: 6 },
             Model { id: 7 },
             Model { id: 8 },
@@ -129,7 +129,7 @@ pub async fn cursor_pagination(db: &DatabaseConnection) -> Result<(), DbErr> {
 
     assert_eq!(
         cursor.first(6).all(db).await?,
-        vec![
+        [
             Model { id: 6 },
             Model { id: 7 },
             Model { id: 8 },
@@ -140,7 +140,7 @@ pub async fn cursor_pagination(db: &DatabaseConnection) -> Result<(), DbErr> {
 
     assert_eq!(
         cursor.last(4).all(db).await?,
-        vec![
+        [
             Model { id: 7 },
             Model { id: 8 },
             Model { id: 9 },
@@ -150,7 +150,7 @@ pub async fn cursor_pagination(db: &DatabaseConnection) -> Result<(), DbErr> {
 
     assert_eq!(
         cursor.last(5).all(db).await?,
-        vec![
+        [
             Model { id: 6 },
             Model { id: 7 },
             Model { id: 8 },
@@ -161,7 +161,7 @@ pub async fn cursor_pagination(db: &DatabaseConnection) -> Result<(), DbErr> {
 
     assert_eq!(
         cursor.last(6).all(db).await?,
-        vec![
+        [
             Model { id: 6 },
             Model { id: 7 },
             Model { id: 8 },
@@ -176,33 +176,33 @@ pub async fn cursor_pagination(db: &DatabaseConnection) -> Result<(), DbErr> {
 
     cursor.after(5).before(8);
 
-    assert_eq!(cursor.first(1).all(db).await?, vec![Model { id: 6 }]);
+    assert_eq!(cursor.first(1).all(db).await?, [Model { id: 6 }]);
 
     assert_eq!(
         cursor.first(2).all(db).await?,
-        vec![Model { id: 6 }, Model { id: 7 }]
+        [Model { id: 6 }, Model { id: 7 }]
     );
 
     assert_eq!(
         cursor.first(3).all(db).await?,
-        vec![Model { id: 6 }, Model { id: 7 }]
+        [Model { id: 6 }, Model { id: 7 }]
     );
 
-    assert_eq!(cursor.last(1).all(db).await?, vec![Model { id: 7 }]);
+    assert_eq!(cursor.last(1).all(db).await?, [Model { id: 7 }]);
 
     assert_eq!(
         cursor.last(2).all(db).await?,
-        vec![Model { id: 6 }, Model { id: 7 }]
+        [Model { id: 6 }, Model { id: 7 }]
     );
 
     assert_eq!(
         cursor.last(3).all(db).await?,
-        vec![Model { id: 6 }, Model { id: 7 }]
+        [Model { id: 6 }, Model { id: 7 }]
     );
 
     // Fetch custom struct
 
-    #[derive(FromQueryResult, Debug, PartialEq)]
+    #[derive(FromQueryResult, Debug, PartialEq, Clone)]
     struct Row {
         id: i32,
     }
@@ -211,12 +211,12 @@ pub async fn cursor_pagination(db: &DatabaseConnection) -> Result<(), DbErr> {
 
     assert_eq!(
         cursor.first(2).all(db).await?,
-        vec![Row { id: 6 }, Row { id: 7 }]
+        [Row { id: 6 }, Row { id: 7 }]
     );
 
     assert_eq!(
         cursor.first(3).all(db).await?,
-        vec![Row { id: 6 }, Row { id: 7 }]
+        [Row { id: 6 }, Row { id: 7 }]
     );
 
     // Fetch JSON value
@@ -225,12 +225,51 @@ pub async fn cursor_pagination(db: &DatabaseConnection) -> Result<(), DbErr> {
 
     assert_eq!(
         cursor.first(2).all(db).await?,
-        vec![json!({ "id": 6 }), json!({ "id": 7 })]
+        [json!({ "id": 6 }), json!({ "id": 7 })]
     );
 
     assert_eq!(
         cursor.first(3).all(db).await?,
-        vec![json!({ "id": 6 }), json!({ "id": 7 })]
+        [json!({ "id": 6 }), json!({ "id": 7 })]
+    );
+
+    #[derive(DerivePartialModel, FromQueryResult, Debug, PartialEq, Clone)]
+    #[sea_orm(entity = "Entity")]
+    struct PartialRow {
+        #[sea_orm(from_col = "id")]
+        id: i32,
+        #[sea_orm(from_expr = "sea_query::Expr::col(Column::Id).add(1000)")]
+        id_shifted: i32,
+    }
+
+    let mut cursor = cursor.into_partial_model::<PartialRow>();
+
+    assert_eq!(
+        cursor.first(2).all(db).await?,
+        [
+            PartialRow {
+                id: 6,
+                id_shifted: 1006,
+            },
+            PartialRow {
+                id: 7,
+                id_shifted: 1007,
+            }
+        ]
+    );
+
+    assert_eq!(
+        cursor.first(3).all(db).await?,
+        [
+            PartialRow {
+                id: 6,
+                id_shifted: 1006,
+            },
+            PartialRow {
+                id: 7,
+                id_shifted: 1007,
+            }
+        ]
     );
 
     Ok(())

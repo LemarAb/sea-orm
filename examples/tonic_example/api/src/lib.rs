@@ -3,7 +3,7 @@ use tonic::{Request, Response, Status};
 
 use entity::post;
 use migration::{Migrator, MigratorTrait};
-use tonic_example_core::{
+use tonic_example_service::{
     sea_orm::{Database, DatabaseConnection},
     Mutation, Query,
 };
@@ -138,6 +138,6 @@ pub fn main() {
     let result = start();
 
     if let Some(err) = result.err() {
-        println!("Error: {}", err);
+        println!("Error: {err}");
     }
 }

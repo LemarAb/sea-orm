@@ -1,4 +1,4 @@
-use heck::{CamelCase, SnakeCase};
+use heck::{ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, TokenStream};
 use quote::format_ident;
 use quote::quote;
@@ -23,7 +23,7 @@ impl Entity {
     }
 
     pub fn get_table_name_camel_case(&self) -> String {
-        self.table_name.to_camel_case()
+        self.table_name.to_upper_camel_case()
     }
 
     pub fn get_table_name_snake_case_ident(&self) -> Ident {
@@ -92,12 +92,90 @@ impl Entity {
             .collect()
     }
 
+    /// Used to generate the names for the `enum RelatedEntity` that is useful to the Seaography project
+    pub fn get_related_entity_enum_name(&self) -> Vec<Ident> {
+        // 1st step get conjunct relations data
+        let conjunct_related_names = self.get_conjunct_relations_to_upper_camel_case();
+
+        // 2nd step get reverse self relations data
+        let self_relations_reverse = self
+            .relations
+            .iter()
+            .filter(|rel| rel.self_referencing)
+            .map(|rel| format_ident!("{}Reverse", rel.get_enum_name()));
+
+        // 3rd step get normal relations data
+        self.get_relation_enum_name()
+            .into_iter()
+            .chain(self_relations_reverse)
+            .chain(conjunct_related_names.into_iter())
+            .collect()
+    }
+
     pub fn get_relation_defs(&self) -> Vec<TokenStream> {
         self.relations.iter().map(|rel| rel.get_def()).collect()
     }
 
     pub fn get_relation_attrs(&self) -> Vec<TokenStream> {
         self.relations.iter().map(|rel| rel.get_attrs()).collect()
+    }
+
+    /// Used to generate the attributes for the `enum RelatedEntity` that is useful to the Seaography project
+    pub fn get_related_entity_attrs(&self) -> Vec<TokenStream> {
+        // 1st step get conjunct relations data
+        let conjunct_related_attrs = self.conjunct_relations.iter().map(|conj| {
+            let entity = format!("super::{}::Entity", conj.get_to_snake_case());
+
+            quote! {
+                #[sea_orm(
+                    entity = #entity
+                )]
+            }
+        });
+
+        // helper function that generates attributes for `Relation` data
+        let produce_relation_attrs = |rel: &Relation, reverse: bool| {
+            let entity = match rel.get_module_name() {
+                Some(module_name) => format!("super::{}::Entity", module_name),
+                None => String::from("Entity"),
+            };
+
+            if rel.self_referencing || !rel.impl_related || rel.num_suffix > 0 {
+                let def = if reverse {
+                    format!("Relation::{}.def().rev()", rel.get_enum_name())
+                } else {
+                    format!("Relation::{}.def()", rel.get_enum_name())
+                };
+
+                quote! {
+                    #[sea_orm(
+                        entity = #entity,
+                        def = #def
+                    )]
+                }
+            } else {
+                quote! {
+                    #[sea_orm(
+                        entity = #entity
+                    )]
+                }
+            }
+        };
+
+        // 2nd step get reverse self relations data
+        let self_relations_reverse_attrs = self
+            .relations
+            .iter()
+            .filter(|rel| rel.self_referencing)
+            .map(|rel| produce_relation_attrs(rel, true));
+
+        // 3rd step get normal relations data
+        self.relations
+            .iter()
+            .map(|rel| produce_relation_attrs(rel, false))
+            .chain(self_relations_reverse_attrs)
+            .chain(conjunct_related_attrs)
+            .collect()
     }
 
     pub fn get_primary_key_auto_increment(&self) -> Ident {
@@ -144,17 +222,17 @@ impl Entity {
             .collect()
     }
 
-    pub fn get_conjunct_relations_to_camel_case(&self) -> Vec<Ident> {
+    pub fn get_conjunct_relations_to_upper_camel_case(&self) -> Vec<Ident> {
         self.conjunct_relations
             .iter()
-            .map(|con_rel| con_rel.get_to_camel_case())
+            .map(|con_rel| con_rel.get_to_upper_camel_case())
             .collect()
     }
 
     pub fn get_eq_needed(&self) -> TokenStream {
-        fn is_floats(col_type: &sea_query::ColumnType) -> bool {
+        fn is_floats(col_type: &ColumnType) -> bool {
             match col_type {
-                ColumnType::Float(_) | ColumnType::Double(_) => true,
+                ColumnType::Float | ColumnType::Double => true,
                 ColumnType::Array(col_type) => is_floats(col_type),
                 _ => false,
             }
@@ -165,6 +243,24 @@ impl Entity {
             // check if float or double exist.
             // if exist, return nothing
             .map_or(quote! {, Eq}, |_| quote! {})
+    }
+
+    pub fn get_column_serde_attributes(
+        &self,
+        serde_skip_deserializing_primary_key: bool,
+        serde_skip_hidden_column: bool,
+    ) -> Vec<TokenStream> {
+        self.columns
+            .iter()
+            .map(|col| {
+                let is_primary_key = self.primary_keys.iter().any(|pk| pk.name == col.name);
+                col.get_serde_attribute(
+                    is_primary_key,
+                    serde_skip_deserializing_primary_key,
+                    serde_skip_hidden_column,
+                )
+            })
+            .collect()
     }
 }
 
@@ -181,7 +277,7 @@ mod tests {
             columns: vec![
                 Column {
                     name: "id".to_owned(),
-                    col_type: ColumnType::Integer(None),
+                    col_type: ColumnType::Integer,
                     auto_increment: false,
                     not_null: false,
                     unique: false,
@@ -204,6 +300,7 @@ mod tests {
                     on_update: Some(ForeignKeyAction::Cascade),
                     self_referencing: false,
                     num_suffix: 0,
+                    impl_related: true,
                 },
                 Relation {
                     ref_table: "filling".to_owned(),
@@ -214,6 +311,7 @@ mod tests {
                     on_update: Some(ForeignKeyAction::Cascade),
                     self_referencing: false,
                     num_suffix: 0,
+                    impl_related: true,
                 },
             ],
             conjunct_relations: vec![],
@@ -427,15 +525,15 @@ mod tests {
     }
 
     #[test]
-    fn test_get_conjunct_relations_to_camel_case() {
+    fn test_get_conjunct_relations_to_upper_camel_case() {
         let entity = setup();
 
         for (i, elem) in entity
-            .get_conjunct_relations_to_camel_case()
+            .get_conjunct_relations_to_upper_camel_case()
             .into_iter()
             .enumerate()
         {
-            assert_eq!(elem, entity.conjunct_relations[i].get_to_camel_case());
+            assert_eq!(elem, entity.conjunct_relations[i].get_to_upper_camel_case());
         }
     }
 

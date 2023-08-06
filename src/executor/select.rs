@@ -1,12 +1,12 @@
 use crate::{
-    error::*, ConnectionTrait, EntityTrait, FromQueryResult, IdenStatic, Iterable, ModelTrait,
-    PrimaryKeyToColumn, QueryResult, Select, SelectA, SelectB, SelectTwo, SelectTwoMany, Statement,
-    StreamTrait, TryGetableMany,
+    error::*, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, IdenStatic, Iterable,
+    ModelTrait, PartialModelTrait, PrimaryKeyToColumn, QueryResult, QuerySelect, Select, SelectA,
+    SelectB, SelectTwo, SelectTwoMany, Statement, StreamTrait, TryGetableMany,
 };
 use futures::{Stream, TryStreamExt};
-use sea_query::SelectStatement;
-use std::marker::PhantomData;
-use std::pin::Pin;
+use sea_query::{SelectStatement, Value};
+use std::collections::HashMap;
+use std::{hash::Hash, marker::PhantomData, pin::Pin};
 
 #[cfg(feature = "with-json")]
 use crate::JsonValue;
@@ -41,7 +41,7 @@ pub trait SelectorTrait {
     fn from_raw_query_result(res: QueryResult) -> Result<Self::Item, DbErr>;
 }
 
-/// Perform an operation on an entity that can yield a Value
+/// Get tuple from query result based on a list of column identifiers
 #[derive(Debug)]
 pub struct SelectGetableValue<T, C>
 where
@@ -49,6 +49,15 @@ where
     C: strum::IntoEnumIterator + sea_query::Iden,
 {
     columns: PhantomData<C>,
+    model: PhantomData<T>,
+}
+
+/// Get tuple from query result based on column index
+#[derive(Debug)]
+pub struct SelectGetableTuple<T>
+where
+    T: TryGetableMany,
+{
     model: PhantomData<T>,
 }
 
@@ -61,7 +70,7 @@ where
     model: PhantomData<M>,
 }
 
-/// Defines a type to get two Modelss
+/// Defines a type to get two Models
 #[derive(Clone, Debug)]
 pub struct SelectTwoModel<M, N>
 where
@@ -81,6 +90,17 @@ where
     fn from_raw_query_result(res: QueryResult) -> Result<Self::Item, DbErr> {
         let cols: Vec<String> = C::iter().map(|col| col.to_string()).collect();
         T::try_get_many(&res, "", &cols).map_err(Into::into)
+    }
+}
+
+impl<T> SelectorTrait for SelectGetableTuple<T>
+where
+    T: TryGetableMany,
+{
+    type Item = T;
+
+    fn from_raw_query_result(res: QueryResult) -> Result<Self::Item, DbErr> {
+        T::try_get_many_by_index(&res).map_err(Into::into)
     }
 }
 
@@ -134,6 +154,45 @@ where
         }
     }
 
+    /// Return a [Selector] from `Self` that wraps a [SelectModel] with a [PartialModel](PartialModelTrait)
+    ///
+    /// ```
+    /// # #[cfg(feature = "macros")]
+    /// # {
+    /// use sea_orm::{
+    ///     entity::*,
+    ///     query::*,
+    ///     tests_cfg::cake::{self, Entity as Cake},
+    ///     DbBackend, DerivePartialModel, FromQueryResult,
+    /// };
+    /// use sea_query::{Expr, Func, SimpleExpr};
+    ///
+    /// #[derive(DerivePartialModel, FromQueryResult)]
+    /// #[sea_orm(entity = "Cake")]
+    /// struct PartialCake {
+    ///     name: String,
+    ///     #[sea_orm(
+    ///         from_expr = r#"SimpleExpr::FunctionCall(Func::upper(Expr::col((Cake, cake::Column::Name))))"#
+    ///     )]
+    ///     name_upper: String,
+    /// }
+    ///
+    /// assert_eq!(
+    ///     cake::Entity::find()
+    ///         .into_partial_model::<PartialCake>()
+    ///         .into_statement(DbBackend::Sqlite)
+    ///         .to_string(),
+    ///     r#"SELECT "cake"."name", UPPER("cake"."name") AS "name_upper" FROM "cake""#
+    /// );
+    /// # }
+    /// ```
+    pub fn into_partial_model<M>(self) -> Selector<SelectModel<M>>
+    where
+        M: PartialModelTrait,
+    {
+        M::select_cols(QuerySelect::select_only(self)).into_model::<M>()
+    }
+
     /// Get a selectable Model as a [JsonValue] for SQL JSON operations
     #[cfg(feature = "with-json")]
     pub fn into_json(self) -> Selector<SelectModel<JsonValue>> {
@@ -151,7 +210,7 @@ where
     /// # pub async fn main() -> Result<(), DbErr> {
     /// #
     /// # let db = MockDatabase::new(DbBackend::Postgres)
-    /// #     .append_query_results(vec![vec![
+    /// #     .append_query_results([[
     /// #         maplit::btreemap! {
     /// #             "cake_name" => Into::<Value>::into("Chocolate Forest"),
     /// #         },
@@ -177,15 +236,15 @@ where
     ///
     /// assert_eq!(
     ///     res,
-    ///     vec!["Chocolate Forest".to_owned(), "New York Cheese".to_owned()]
+    ///     ["Chocolate Forest".to_owned(), "New York Cheese".to_owned()]
     /// );
     ///
     /// assert_eq!(
     ///     db.into_transaction_log(),
-    ///     vec![Transaction::from_sql_and_values(
+    ///     [Transaction::from_sql_and_values(
     ///         DbBackend::Postgres,
     ///         r#"SELECT "cake"."name" AS "cake_name" FROM "cake""#,
-    ///         vec![]
+    ///         []
     ///     )]
     /// );
     /// #
@@ -201,7 +260,7 @@ where
     /// # pub async fn main() -> Result<(), DbErr> {
     /// #
     /// # let db = MockDatabase::new(DbBackend::Postgres)
-    /// #     .append_query_results(vec![vec![
+    /// #     .append_query_results([[
     /// #         maplit::btreemap! {
     /// #             "cake_name" => Into::<Value>::into("Chocolate Forest"),
     /// #             "num_of_cakes" => Into::<Value>::into(2i64),
@@ -226,19 +285,19 @@ where
     ///     .all(&db)
     ///     .await?;
     ///
-    /// assert_eq!(res, vec![("Chocolate Forest".to_owned(), 2i64)]);
+    /// assert_eq!(res, [("Chocolate Forest".to_owned(), 2i64)]);
     ///
     /// assert_eq!(
     ///     db.into_transaction_log(),
-    ///     vec![Transaction::from_sql_and_values(
+    ///     [Transaction::from_sql_and_values(
     ///         DbBackend::Postgres,
-    ///         vec![
+    ///         [
     ///             r#"SELECT "cake"."name" AS "cake_name", COUNT("cake"."id") AS "num_of_cakes""#,
     ///             r#"FROM "cake" GROUP BY "cake"."name""#,
     ///         ]
     ///         .join(" ")
     ///         .as_str(),
-    ///         vec![]
+    ///         []
     ///     )]
     /// );
     /// #
@@ -251,6 +310,104 @@ where
         C: strum::IntoEnumIterator + sea_query::Iden,
     {
         Selector::<SelectGetableValue<T, C>>::with_columns(self.query)
+    }
+
+    /// ```
+    /// # use sea_orm::{error::*, tests_cfg::*, *};
+    /// #
+    /// # #[smol_potat::main]
+    /// # #[cfg(all(feature = "mock", feature = "macros"))]
+    /// # pub async fn main() -> Result<(), DbErr> {
+    /// #
+    /// # let db = MockDatabase::new(DbBackend::Postgres)
+    /// #     .append_query_results(vec![vec![
+    /// #         maplit::btreemap! {
+    /// #             "cake_name" => Into::<Value>::into("Chocolate Forest"),
+    /// #         },
+    /// #         maplit::btreemap! {
+    /// #             "cake_name" => Into::<Value>::into("New York Cheese"),
+    /// #         },
+    /// #     ]])
+    /// #     .into_connection();
+    /// #
+    /// use sea_orm::{entity::*, query::*, tests_cfg::cake};
+    ///
+    /// let res: Vec<String> = cake::Entity::find()
+    ///     .select_only()
+    ///     .column(cake::Column::Name)
+    ///     .into_tuple()
+    ///     .all(&db)
+    ///     .await?;
+    ///
+    /// assert_eq!(
+    ///     res,
+    ///     vec!["Chocolate Forest".to_owned(), "New York Cheese".to_owned()]
+    /// );
+    ///
+    /// assert_eq!(
+    ///     db.into_transaction_log(),
+    ///     vec![Transaction::from_sql_and_values(
+    ///         DbBackend::Postgres,
+    ///         r#"SELECT "cake"."name" FROM "cake""#,
+    ///         vec![]
+    ///     )]
+    /// );
+    /// #
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// ```
+    /// # use sea_orm::{error::*, tests_cfg::*, *};
+    /// #
+    /// # #[smol_potat::main]
+    /// # #[cfg(all(feature = "mock", feature = "macros"))]
+    /// # pub async fn main() -> Result<(), DbErr> {
+    /// #
+    /// # let db = MockDatabase::new(DbBackend::Postgres)
+    /// #     .append_query_results(vec![vec![
+    /// #         maplit::btreemap! {
+    /// #             "cake_name" => Into::<Value>::into("Chocolate Forest"),
+    /// #             "num_of_cakes" => Into::<Value>::into(2i64),
+    /// #         },
+    /// #     ]])
+    /// #     .into_connection();
+    /// #
+    /// use sea_orm::{entity::*, query::*, tests_cfg::cake};
+    ///
+    /// let res: Vec<(String, i64)> = cake::Entity::find()
+    ///     .select_only()
+    ///     .column(cake::Column::Name)
+    ///     .column(cake::Column::Id)
+    ///     .group_by(cake::Column::Name)
+    ///     .into_tuple()
+    ///     .all(&db)
+    ///     .await?;
+    ///
+    /// assert_eq!(res, vec![("Chocolate Forest".to_owned(), 2i64)]);
+    ///
+    /// assert_eq!(
+    ///     db.into_transaction_log(),
+    ///     vec![Transaction::from_sql_and_values(
+    ///         DbBackend::Postgres,
+    ///         vec![
+    ///             r#"SELECT "cake"."name", "cake"."id""#,
+    ///             r#"FROM "cake" GROUP BY "cake"."name""#,
+    ///         ]
+    ///         .join(" ")
+    ///         .as_str(),
+    ///         vec![]
+    ///     )]
+    /// );
+    /// #
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn into_tuple<T>(self) -> Selector<SelectGetableTuple<T>>
+    where
+        T: TryGetableMany,
+    {
+        Selector::<SelectGetableTuple<T>>::into_tuple(self.query)
     }
 
     /// Get one Model from the SELECT query
@@ -279,6 +436,18 @@ where
     {
         self.into_model().stream(db).await
     }
+
+    /// Stream the result of the operation with PartialModel
+    pub async fn stream_partial_model<'a: 'b, 'b, C, M>(
+        self,
+        db: &'a C,
+    ) -> Result<impl Stream<Item = Result<M, DbErr>> + 'b + Send, DbErr>
+    where
+        C: ConnectionTrait + StreamTrait + Send,
+        M: PartialModelTrait + Send + 'b,
+    {
+        self.into_partial_model().stream(db).await
+    }
 }
 
 impl<E, F> SelectTwo<E, F>
@@ -296,6 +465,18 @@ where
             query: self.query,
             selector: SelectTwoModel { model: PhantomData },
         }
+    }
+
+    /// Perform a conversion into a [SelectTwoModel] with [PartialModel](PartialModelTrait)
+    pub fn into_partial_model<M, N>(self) -> Selector<SelectTwoModel<M, N>>
+    where
+        M: PartialModelTrait,
+        N: PartialModelTrait,
+    {
+        let select = QuerySelect::select_only(self);
+        let select = M::select_cols(select);
+        let select = N::select_cols(select);
+        select.into_model::<M, N>()
     }
 
     /// Convert the Models into JsonValue
@@ -333,6 +514,19 @@ where
     {
         self.into_model().stream(db).await
     }
+
+    /// Stream the result of the operation with PartialModel
+    pub async fn stream_partial_model<'a: 'b, 'b, C, M, N>(
+        self,
+        db: &'a C,
+    ) -> Result<impl Stream<Item = Result<(M, Option<N>), DbErr>> + 'b + Send, DbErr>
+    where
+        C: ConnectionTrait + StreamTrait + Send,
+        M: PartialModelTrait + Send + 'b,
+        N: PartialModelTrait + Send + 'b,
+    {
+        self.into_partial_model().stream(db).await
+    }
 }
 
 impl<E, F> SelectTwoMany<E, F>
@@ -350,6 +544,18 @@ where
             query: self.query,
             selector: SelectTwoModel { model: PhantomData },
         }
+    }
+
+    /// Performs a conversion to [Selector] with partial model
+    fn into_partial_model<M, N>(self) -> Selector<SelectTwoModel<M, N>>
+    where
+        M: PartialModelTrait,
+        N: PartialModelTrait,
+    {
+        let select = self.select_only();
+        let select = M::select_cols(select);
+        let select = N::select_cols(select);
+        select.into_model()
     }
 
     /// Convert the results to JSON
@@ -370,6 +576,19 @@ where
         C: ConnectionTrait + StreamTrait + Send,
     {
         self.into_model().stream(db).await
+    }
+
+    /// Stream the result of the operation with PartialModel
+    pub async fn stream_partial_model<'a: 'b, 'b, C, M, N>(
+        self,
+        db: &'a C,
+    ) -> Result<impl Stream<Item = Result<(M, Option<N>), DbErr>> + 'b + Send, DbErr>
+    where
+        C: ConnectionTrait + StreamTrait + Send,
+        M: PartialModelTrait + Send + 'b,
+        N: PartialModelTrait + Send + 'b,
+    {
+        self.into_partial_model().stream(db).await
     }
 
     /// Get all Models from the select operation
@@ -402,7 +621,7 @@ impl<S> Selector<S>
 where
     S: SelectorTrait,
 {
-    /// Create `Selector` from Statment and columns. Executing this `Selector`
+    /// Create `Selector` from Statement and columns. Executing this `Selector`
     /// will return a type `T` which implement `TryGetableMany`.
     pub fn with_columns<T, C>(query: SelectStatement) -> Selector<SelectGetableValue<T, C>>
     where
@@ -418,6 +637,17 @@ where
         }
     }
 
+    /// Get tuple from query result based on column index
+    pub fn into_tuple<T>(query: SelectStatement) -> Selector<SelectGetableTuple<T>>
+    where
+        T: TryGetableMany,
+    {
+        Selector {
+            query,
+            selector: SelectGetableTuple { model: PhantomData },
+        }
+    }
+
     fn into_selector_raw<C>(self, db: &C) -> SelectorRaw<S>
     where
         C: ConnectionTrait,
@@ -428,6 +658,11 @@ where
             stmt,
             selector: self.selector,
         }
+    }
+
+    /// Get the SQL statement
+    pub fn into_statement(self, builder: DbBackend) -> Statement {
+        builder.build(&self.query)
     }
 
     /// Get an item from the Select query
@@ -500,7 +735,7 @@ where
     /// # pub async fn main() -> Result<(), DbErr> {
     /// #
     /// # let db = MockDatabase::new(DbBackend::Postgres)
-    /// #     .append_query_results(vec![vec![
+    /// #     .append_query_results([[
     /// #         maplit::btreemap! {
     /// #             "name" => Into::<Value>::into("Chocolate Forest"),
     /// #             "num_of_cakes" => Into::<Value>::into(1),
@@ -524,7 +759,7 @@ where
     ///     .from_raw_sql(Statement::from_sql_and_values(
     ///         DbBackend::Postgres,
     ///         r#"SELECT "cake"."name", count("cake"."id") AS "num_of_cakes" FROM "cake""#,
-    ///         vec![],
+    ///         [],
     ///     ))
     ///     .into_model::<SelectResult>()
     ///     .all(&db)
@@ -532,7 +767,7 @@ where
     ///
     /// assert_eq!(
     ///     res,
-    ///     vec![
+    ///     [
     ///         SelectResult {
     ///             name: "Chocolate Forest".to_owned(),
     ///             num_of_cakes: 1,
@@ -546,10 +781,10 @@ where
     ///
     /// assert_eq!(
     ///     db.into_transaction_log(),
-    ///     vec![Transaction::from_sql_and_values(
+    ///     [Transaction::from_sql_and_values(
     ///         DbBackend::Postgres,
     ///         r#"SELECT "cake"."name", count("cake"."id") AS "num_of_cakes" FROM "cake""#,
-    ///         vec![]
+    ///         []
     ///     ),]
     /// );
     /// #
@@ -574,7 +809,7 @@ where
     /// # pub async fn main() -> Result<(), DbErr> {
     /// #
     /// # let db = MockDatabase::new(DbBackend::Postgres)
-    /// #     .append_query_results(vec![vec![
+    /// #     .append_query_results([[
     /// #         maplit::btreemap! {
     /// #             "name" => Into::<Value>::into("Chocolate Forest"),
     /// #             "num_of_cakes" => Into::<Value>::into(1),
@@ -590,7 +825,7 @@ where
     ///
     /// let res: Vec<serde_json::Value> = cake::Entity::find().from_raw_sql(
     ///     Statement::from_sql_and_values(
-    ///         DbBackend::Postgres, r#"SELECT "cake"."id", "cake"."name" FROM "cake""#, vec![]
+    ///         DbBackend::Postgres, r#"SELECT "cake"."id", "cake"."name" FROM "cake""#, []
     ///     )
     /// )
     /// .into_json()
@@ -599,7 +834,7 @@ where
     ///
     /// assert_eq!(
     ///     res,
-    ///     vec![
+    ///     [
     ///         serde_json::json!({
     ///             "name": "Chocolate Forest",
     ///             "num_of_cakes": 1,
@@ -613,9 +848,9 @@ where
     ///
     /// assert_eq!(
     ///     db.into_transaction_log(),
-    ///     vec![
+    ///     [
     ///     Transaction::from_sql_and_values(
-    ///             DbBackend::Postgres, r#"SELECT "cake"."id", "cake"."name" FROM "cake""#, vec![]
+    ///             DbBackend::Postgres, r#"SELECT "cake"."id", "cake"."name" FROM "cake""#, []
     ///     ),
     /// ]);
     /// #
@@ -630,6 +865,11 @@ where
         }
     }
 
+    /// Get the SQL statement
+    pub fn into_statement(self) -> Statement {
+        self.stmt
+    }
+
     /// Get an item from the Select query
     /// ```
     /// # use sea_orm::{error::*, tests_cfg::*, *};
@@ -639,8 +879,8 @@ where
     /// # pub async fn main() -> Result<(), DbErr> {
     /// #
     /// # let db = MockDatabase::new(DbBackend::Postgres)
-    /// #     .append_query_results(vec![
-    /// #         vec![cake::Model {
+    /// #     .append_query_results([
+    /// #         [cake::Model {
     /// #             id: 1,
     /// #             name: "Cake".to_owned(),
     /// #         }],
@@ -653,17 +893,17 @@ where
     ///     .from_raw_sql(Statement::from_sql_and_values(
     ///         DbBackend::Postgres,
     ///         r#"SELECT "cake"."id", "cake"."name" FROM "cake" WHERE "id" = $1"#,
-    ///         vec![1.into()],
+    ///         [1.into()],
     ///     ))
     ///     .one(&db)
     ///     .await?;
     ///
     /// assert_eq!(
     ///     db.into_transaction_log(),
-    ///     vec![Transaction::from_sql_and_values(
+    ///     [Transaction::from_sql_and_values(
     ///         DbBackend::Postgres,
     ///         r#"SELECT "cake"."id", "cake"."name" FROM "cake" WHERE "id" = $1"#,
-    ///         vec![1.into()]
+    ///         [1.into()]
     ///     ),]
     /// );
     /// #
@@ -690,8 +930,8 @@ where
     /// # pub async fn main() -> Result<(), DbErr> {
     /// #
     /// # let db = MockDatabase::new(DbBackend::Postgres)
-    /// #     .append_query_results(vec![
-    /// #         vec![cake::Model {
+    /// #     .append_query_results([
+    /// #         [cake::Model {
     /// #             id: 1,
     /// #             name: "Cake".to_owned(),
     /// #         }],
@@ -704,17 +944,17 @@ where
     ///     .from_raw_sql(Statement::from_sql_and_values(
     ///         DbBackend::Postgres,
     ///         r#"SELECT "cake"."id", "cake"."name" FROM "cake""#,
-    ///         vec![],
+    ///         [],
     ///     ))
     ///     .all(&db)
     ///     .await?;
     ///
     /// assert_eq!(
     ///     db.into_transaction_log(),
-    ///     vec![Transaction::from_sql_and_values(
+    ///     [Transaction::from_sql_and_values(
     ///         DbBackend::Postgres,
     ///         r#"SELECT "cake"."id", "cake"."name" FROM "cake""#,
-    ///         vec![]
+    ///         []
     ///     ),]
     /// );
     /// #
@@ -757,6 +997,88 @@ where
     L: EntityTrait,
     R: EntityTrait,
 {
+    // This is a strong point to consider adding a trait associated constant
+    // to PrimaryKeyTrait to indicate the arity
+    let pkcol: Vec<_> = <L::PrimaryKey as Iterable>::iter()
+        .map(|pk| pk.into_column())
+        .collect();
+    if pkcol.len() == 1 {
+        consolidate_query_result_of::<L, R, UnitPk<L>>(rows, UnitPk(pkcol[0]))
+    } else {
+        consolidate_query_result_of::<L, R, TuplePk<L>>(rows, TuplePk(pkcol))
+    }
+}
+
+trait ModelKey<E: EntityTrait> {
+    type Type: Hash + PartialEq + Eq;
+    fn get(&self, model: &E::Model) -> Self::Type;
+}
+
+// This could have been an array of [E::Column; <E::PrimaryKey as PrimaryKeyTrait>::ARITY]
+struct UnitPk<E: EntityTrait>(E::Column);
+struct TuplePk<E: EntityTrait>(Vec<E::Column>);
+
+impl<E: EntityTrait> ModelKey<E> for UnitPk<E> {
+    type Type = Value;
+    fn get(&self, model: &E::Model) -> Self::Type {
+        model.get(self.0)
+    }
+}
+
+impl<E: EntityTrait> ModelKey<E> for TuplePk<E> {
+    type Type = Vec<Value>;
+    fn get(&self, model: &E::Model) -> Self::Type {
+        let mut key = Vec::new();
+        for col in self.0.iter() {
+            key.push(model.get(*col));
+        }
+        key
+    }
+}
+
+fn consolidate_query_result_of<L, R, KEY: ModelKey<L>>(
+    mut rows: Vec<(L::Model, Option<R::Model>)>,
+    model_key: KEY,
+) -> Vec<(L::Model, Vec<R::Model>)>
+where
+    L: EntityTrait,
+    R: EntityTrait,
+{
+    let mut hashmap: HashMap<KEY::Type, Vec<R::Model>> =
+        rows.iter_mut().fold(HashMap::new(), |mut acc, row| {
+            let key = model_key.get(&row.0);
+            if let Some(value) = row.1.take() {
+                let vec: Option<&mut Vec<R::Model>> = acc.get_mut(&key);
+                if let Some(vec) = vec {
+                    vec.push(value)
+                } else {
+                    acc.insert(key, vec![value]);
+                }
+            } else if acc.get(&key).is_none() {
+                acc.insert(key, vec![]);
+            }
+
+            acc
+        });
+
+    rows.into_iter()
+        .filter_map(|(l_model, _)| {
+            let l_pk = model_key.get(&l_model);
+            let r_models = hashmap.remove(&l_pk);
+            r_models.map(|r_models| (l_model, r_models))
+        })
+        .collect()
+}
+
+/// This is the legacy consolidate algorithm. Kept for reference
+#[allow(dead_code)]
+fn consolidate_query_result_of_ordered_rows<L, R>(
+    rows: Vec<(L::Model, Option<R::Model>)>,
+) -> Vec<(L::Model, Vec<R::Model>)>
+where
+    L: EntityTrait,
+    R: EntityTrait,
+{
     let mut acc: Vec<(L::Model, Vec<R::Model>)> = Vec::new();
     for (l, r) in rows {
         if let Some((last_l, last_r)) = acc.last_mut() {
@@ -777,11 +1099,11 @@ where
                 }
             }
         }
-        if r.is_some() {
-            acc.push((l, vec![r.unwrap()]));
-        } else {
-            acc.push((l, vec![]));
-        }
+        let rows = match r {
+            Some(r) => vec![r],
+            None => vec![],
+        };
+        acc.push((l, rows));
     }
     acc
 }

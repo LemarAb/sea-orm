@@ -2,11 +2,9 @@ use std::env;
 
 use entity::post;
 use migration::{Migrator, MigratorTrait};
-use salvo::extra::affix;
-use salvo::extra::serve_static::DirHandler;
+use salvo::affix;
 use salvo::prelude::*;
-use salvo::writer::Text;
-use salvo_example_core::{
+use salvo_example_service::{
     sea_orm::{Database, DatabaseConnection},
     Mutation, Query,
 };
@@ -29,7 +27,7 @@ async fn create(req: &mut Request, depot: &mut Depot, res: &mut Response) -> Res
     let conn = &state.conn;
 
     let form = req
-        .extract_form::<post::Model>()
+        .parse_form::<post::Model>()
         .await
         .map_err(|_| StatusError::bad_request())?;
 
@@ -37,7 +35,7 @@ async fn create(req: &mut Request, depot: &mut Depot, res: &mut Response) -> Res
         .await
         .map_err(|_| StatusError::internal_server_error())?;
 
-    res.redirect_found("/");
+    Redirect::found("/").render(res);
     Ok(())
 }
 
@@ -114,7 +112,7 @@ async fn update(req: &mut Request, depot: &mut Depot, res: &mut Response) -> Res
     let conn = &state.conn;
     let id = req.param::<i32>("id").unwrap_or_default();
     let form = req
-        .extract_form::<post::Model>()
+        .parse_form::<post::Model>()
         .await
         .map_err(|_| StatusError::bad_request())?;
 
@@ -122,7 +120,7 @@ async fn update(req: &mut Request, depot: &mut Depot, res: &mut Response) -> Res
         .await
         .map_err(|_| StatusError::internal_server_error())?;
 
-    res.redirect_found("/");
+    Redirect::found("/").render(res);
     Ok(())
 }
 
@@ -138,7 +136,7 @@ async fn delete(req: &mut Request, depot: &mut Depot, res: &mut Response) -> Res
         .await
         .map_err(|_| StatusError::internal_server_error())?;
 
-    res.redirect_found("/");
+    Redirect::found("/").render(res);
     Ok(())
 }
 
@@ -152,7 +150,7 @@ pub async fn main() {
     let db_url = env::var("DATABASE_URL").expect("DATABASE_URL is not set in .env file");
     let host = env::var("HOST").expect("HOST is not set in .env file");
     let port = env::var("PORT").expect("PORT is not set in .env file");
-    let server_url = format!("{}:{}", host, port);
+    let server_url = format!("{host}:{port}");
 
     // create post table if not exists
     let conn = Database::connect(&db_url).await.unwrap();
@@ -160,7 +158,7 @@ pub async fn main() {
     let templates = Tera::new(concat!(env!("CARGO_MANIFEST_DIR"), "/templates/**/*")).unwrap();
     let state = AppState { templates, conn };
 
-    println!("Starting server at {}", server_url);
+    println!("Starting server at {server_url}");
 
     let router = Router::new()
         .hoop(affix::inject(state))
@@ -170,13 +168,13 @@ pub async fn main() {
         .push(Router::with_path("<id>").get(edit).post(update))
         .push(Router::with_path("delete/<id>").post(delete))
         .push(
-            Router::with_path("static/<**>").get(DirHandler::new(concat!(
+            Router::with_path("static/<**>").get(salvo::prelude::StaticDir::new(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/static"
             ))),
         );
 
-    Server::new(TcpListener::bind(&format!("{}:{}", host, port)))
+    Server::new(TcpListener::bind(TcpListener::new(format!("{host}:{port}"))).await)
         .serve(router)
         .await;
 }

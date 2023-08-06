@@ -37,7 +37,7 @@ pub trait ModelTrait: Clone + Send + Debug {
         l.find_linked().belongs_to_tbl_alias(self, tbl_alias)
     }
 
-    /// Delete an model
+    /// Delete a model
     async fn delete<'a, A, C>(self, db: &'a C) -> Result<DeleteResult, DbErr>
     where
         Self: IntoActiveModel<A>,
@@ -67,7 +67,7 @@ pub trait FromQueryResult: Sized {
     /// # pub async fn main() -> Result<(), DbErr> {
     /// #
     /// # let db = MockDatabase::new(DbBackend::Postgres)
-    /// #     .append_query_results(vec![vec![
+    /// #     .append_query_results([[
     /// #         maplit::btreemap! {
     /// #             "name" => Into::<Value>::into("Chocolate Forest"),
     /// #             "num_of_cakes" => Into::<Value>::into(2),
@@ -86,14 +86,14 @@ pub trait FromQueryResult: Sized {
     /// let res: Vec<SelectResult> = SelectResult::find_by_statement(Statement::from_sql_and_values(
     ///     DbBackend::Postgres,
     ///     r#"SELECT "name", COUNT(*) AS "num_of_cakes" FROM "cake" GROUP BY("name")"#,
-    ///     vec![],
+    ///     [],
     /// ))
     /// .all(&db)
     /// .await?;
     ///
     /// assert_eq!(
     ///     res,
-    ///     vec![SelectResult {
+    ///     [SelectResult {
     ///         name: "Chocolate Forest".to_owned(),
     ///         num_of_cakes: 2,
     ///     },]
@@ -101,10 +101,10 @@ pub trait FromQueryResult: Sized {
     /// #
     /// # assert_eq!(
     /// #     db.into_transaction_log(),
-    /// #     vec![Transaction::from_sql_and_values(
+    /// #     [Transaction::from_sql_and_values(
     /// #         DbBackend::Postgres,
     /// #         r#"SELECT "name", COUNT(*) AS "num_of_cakes" FROM "cake" GROUP BY("name")"#,
-    /// #         vec![]
+    /// #         []
     /// #     ),]
     /// # );
     /// #

@@ -1,5 +1,5 @@
 use crate::{
-    cast_text_as_enum, ActiveModelTrait, ColumnTrait, EntityTrait, Iterable, PrimaryKeyToColumn,
+    ActiveModelTrait, ActiveValue, ColumnTrait, EntityTrait, Iterable, PrimaryKeyToColumn,
     QueryFilter, QueryTrait,
 };
 use core::marker::PhantomData;
@@ -92,11 +92,11 @@ where
     fn prepare_filters(mut self) -> Self {
         for key in <A::Entity as EntityTrait>::PrimaryKey::iter() {
             let col = key.into_column();
-            let av = self.model.get(col);
-            if av.is_set() || av.is_unchanged() {
-                self = self.filter(col.eq(av.unwrap()));
-            } else {
-                panic!("PrimaryKey is not set");
+            match self.model.get(col) {
+                ActiveValue::Set(value) | ActiveValue::Unchanged(value) => {
+                    self = self.filter(col.eq(value));
+                }
+                ActiveValue::NotSet => panic!("PrimaryKey is not set"),
             }
         }
         self
@@ -107,10 +107,12 @@ where
             if <A::Entity as EntityTrait>::PrimaryKey::from_column(col).is_some() {
                 continue;
             }
-            let av = self.model.get(col);
-            if av.is_set() {
-                let expr = cast_text_as_enum(Expr::val(av.into_value().unwrap()), &col);
-                self.query.value(col, expr);
+            match self.model.get(col) {
+                ActiveValue::Set(value) => {
+                    let expr = col.save_as(Expr::val(value));
+                    self.query.value(col, expr);
+                }
+                ActiveValue::Unchanged(_) | ActiveValue::NotSet => {}
             }
         }
         self
@@ -187,9 +189,12 @@ where
         A: ActiveModelTrait<Entity = E>,
     {
         for col in E::Column::iter() {
-            let av = model.get(col);
-            if av.is_set() {
-                self.query.value(col, av.unwrap());
+            match model.get(col) {
+                ActiveValue::Set(value) => {
+                    let expr = col.save_as(Expr::val(value));
+                    self.query.value(col, expr);
+                }
+                ActiveValue::Unchanged(_) | ActiveValue::NotSet => {}
             }
         }
         self
@@ -207,7 +212,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::tests_cfg::{cake, fruit};
+    use crate::tests_cfg::{cake, fruit, lunch_set, sea_orm_active_enums::Tea};
     use crate::{entity::*, query::*, DbBackend};
     use sea_query::{Expr, Value};
 
@@ -292,6 +297,35 @@ mod tests {
                 .build(DbBackend::Postgres)
                 .to_string(),
             r#"UPDATE "fruit" SET "id" = 3 WHERE "fruit"."id" = 2"#,
+        );
+    }
+
+    #[test]
+    fn update_7() {
+        assert_eq!(
+            Update::many(lunch_set::Entity)
+                .set(lunch_set::ActiveModel {
+                    tea: Set(Tea::EverydayTea),
+                    ..Default::default()
+                })
+                .filter(lunch_set::Column::Tea.eq(Tea::BreakfastTea))
+                .build(DbBackend::Postgres)
+                .to_string(),
+            r#"UPDATE "lunch_set" SET "tea" = CAST('EverydayTea' AS tea) WHERE "lunch_set"."tea" = CAST('BreakfastTea' AS tea)"#,
+        );
+    }
+
+    #[test]
+    fn update_8() {
+        assert_eq!(
+            Update::one(lunch_set::ActiveModel {
+                id: Unchanged(1),
+                tea: Set(Tea::EverydayTea),
+                ..Default::default()
+            })
+            .build(DbBackend::Postgres)
+            .to_string(),
+            r#"UPDATE "lunch_set" SET "tea" = CAST('EverydayTea' AS tea) WHERE "lunch_set"."id" = 1"#,
         );
     }
 }

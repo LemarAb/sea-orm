@@ -1,6 +1,7 @@
 use crate::{
-    cast_enum_as_text, error::*, ActiveModelTrait, ConnectionTrait, EntityTrait, Insert,
-    IntoActiveModel, Iterable, PrimaryKeyTrait, SelectModel, SelectorRaw, Statement, TryFromU64,
+    error::*, ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, Insert, IntoActiveModel,
+    Iterable, PrimaryKeyToColumn, PrimaryKeyTrait, SelectModel, SelectorRaw, Statement, TryFromU64,
+    TryInsert,
 };
 use sea_query::{Expr, FromValueTuple, Iden, InsertStatement, IntoColumnRef, Query, ValueTuple};
 use std::{future::Future, marker::PhantomData};
@@ -26,6 +27,83 @@ where
     pub last_insert_id: <<<A as ActiveModelTrait>::Entity as EntityTrait>::PrimaryKey as PrimaryKeyTrait>::ValueType,
 }
 
+/// The types of results for an INSERT operation
+#[derive(Debug)]
+pub enum TryInsertResult<T> {
+    /// The INSERT statement did not have any value to insert
+    Empty,
+    /// The INSERT operation did not insert any valid value
+    Conflicted,
+    /// Successfully inserted
+    Inserted(T),
+}
+
+impl<A> TryInsert<A>
+where
+    A: ActiveModelTrait,
+{
+    /// Execute an insert operation
+    #[allow(unused_mut)]
+    pub async fn exec<'a, C>(self, db: &'a C) -> Result<TryInsertResult<InsertResult<A>>, DbErr>
+    where
+        C: ConnectionTrait,
+        A: 'a,
+    {
+        if self.insert_struct.columns.is_empty() {
+            return Ok(TryInsertResult::Empty);
+        }
+        let res = self.insert_struct.exec(db).await;
+        match res {
+            Ok(res) => Ok(TryInsertResult::Inserted(res)),
+            Err(DbErr::RecordNotInserted) => Ok(TryInsertResult::Conflicted),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Execute an insert operation without returning (don't use `RETURNING` syntax)
+    /// Number of rows affected is returned
+    pub async fn exec_without_returning<'a, C>(
+        self,
+        db: &'a C,
+    ) -> Result<TryInsertResult<u64>, DbErr>
+    where
+        <A::Entity as EntityTrait>::Model: IntoActiveModel<A>,
+        C: ConnectionTrait,
+        A: 'a,
+    {
+        if self.insert_struct.columns.is_empty() {
+            return Ok(TryInsertResult::Empty);
+        }
+        let res = self.insert_struct.exec_without_returning(db).await;
+        match res {
+            Ok(res) => Ok(TryInsertResult::Inserted(res)),
+            Err(DbErr::RecordNotInserted) => Ok(TryInsertResult::Conflicted),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Execute an insert operation and return the inserted model (use `RETURNING` syntax if supported)
+    pub async fn exec_with_returning<'a, C>(
+        self,
+        db: &'a C,
+    ) -> Result<TryInsertResult<<A::Entity as EntityTrait>::Model>, DbErr>
+    where
+        <A::Entity as EntityTrait>::Model: IntoActiveModel<A>,
+        C: ConnectionTrait,
+        A: 'a,
+    {
+        if self.insert_struct.columns.is_empty() {
+            return Ok(TryInsertResult::Empty);
+        }
+        let res = self.insert_struct.exec_with_returning(db).await;
+        match res {
+            Ok(res) => Ok(TryInsertResult::Inserted(res)),
+            Err(DbErr::RecordNotInserted) => Ok(TryInsertResult::Conflicted),
+            Err(err) => Err(err),
+        }
+    }
+}
+
 impl<A> Insert<A>
 where
     A: ActiveModelTrait,
@@ -40,8 +118,9 @@ where
         // so that self is dropped before entering await
         let mut query = self.query;
         if db.support_returning() && <A::Entity as EntityTrait>::PrimaryKey::iter().count() > 0 {
-            let returning = Query::returning().columns(
-                <A::Entity as EntityTrait>::PrimaryKey::iter().map(|c| c.into_column_ref()),
+            let returning = Query::returning().exprs(
+                <A::Entity as EntityTrait>::PrimaryKey::iter()
+                    .map(|c| c.into_column().select_as(Expr::col(c.into_column_ref()))),
             );
             query.returning(returning);
         }
@@ -62,7 +141,7 @@ where
         Inserter::<A>::new(self.primary_key, self.query).exec_without_returning(db)
     }
 
-    /// Execute an insert operation and return the inserted model (use `RETURNING` syntax if database supported)
+    /// Execute an insert operation and return the inserted model (use `RETURNING` syntax if supported)
     pub fn exec_with_returning<'a, C>(
         self,
         db: &'a C,
@@ -111,7 +190,7 @@ where
         exec_insert_without_returning(self.query, db)
     }
 
-    /// Execute an insert operation and return the inserted model (use `RETURNING` syntax if database supported)
+    /// Execute an insert operation and return the inserted model (use `RETURNING` syntax if supported)
     pub fn exec_with_returning<'a, C>(
         self,
         db: &'a C,
@@ -125,7 +204,6 @@ where
     }
 }
 
-#[allow(unused_variables, unreachable_code)]
 async fn exec_insert<A, C>(
     primary_key: Option<ValueTuple>,
     statement: Statement,
@@ -137,26 +215,37 @@ where
 {
     type PrimaryKey<A> = <<A as ActiveModelTrait>::Entity as EntityTrait>::PrimaryKey;
     type ValueTypeOf<A> = <PrimaryKey<A> as PrimaryKeyTrait>::ValueType;
-    let last_insert_id_opt = match db.support_returning() {
-        true => {
+
+    let last_insert_id = match (primary_key, db.support_returning()) {
+        (Some(value_tuple), _) => {
+            let res = db.execute(statement).await?;
+            if res.rows_affected() == 0 {
+                return Err(DbErr::RecordNotInserted);
+            }
+            FromValueTuple::from_value_tuple(value_tuple)
+        }
+        (None, true) => {
+            let mut rows = db.query_all(statement).await?;
+            let row = match rows.pop() {
+                Some(row) => row,
+                None => return Err(DbErr::RecordNotInserted),
+            };
             let cols = PrimaryKey::<A>::iter()
                 .map(|col| col.to_string())
                 .collect::<Vec<_>>();
-            let res = db.query_one(statement).await?.unwrap();
-            res.try_get_many("", cols.as_ref()).ok()
+            row.try_get_many("", cols.as_ref())
+                .map_err(|_| DbErr::UnpackInsertId)?
         }
-        false => {
-            let last_insert_id = db.execute(statement).await?.last_insert_id();
-            ValueTypeOf::<A>::try_from_u64(last_insert_id).ok()
+        (None, false) => {
+            let res = db.execute(statement).await?;
+            if res.rows_affected() == 0 {
+                return Err(DbErr::RecordNotInserted);
+            }
+            let last_insert_id = res.last_insert_id();
+            ValueTypeOf::<A>::try_from_u64(last_insert_id).map_err(|_| DbErr::UnpackInsertId)?
         }
     };
-    let last_insert_id = match primary_key {
-        Some(value_tuple) => FromValueTuple::from_value_tuple(value_tuple),
-        None => match last_insert_id_opt {
-            Some(last_insert_id) => last_insert_id,
-            None => return Err(DbErr::UnpackInsertId),
-        },
-    };
+
     Ok(InsertResult { last_insert_id })
 }
 
@@ -186,8 +275,7 @@ where
     let found = match db.support_returning() {
         true => {
             let returning = Query::returning().exprs(
-                <A::Entity as EntityTrait>::Column::iter()
-                    .map(|c| cast_enum_as_text(Expr::col(c), &c)),
+                <A::Entity as EntityTrait>::Column::iter().map(|c| c.select_as(Expr::col(c))),
             );
             insert_statement.returning(returning);
             SelectorRaw::<SelectModel<<A::Entity as EntityTrait>::Model>>::from_statement(
