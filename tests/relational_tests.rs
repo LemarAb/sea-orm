@@ -2,9 +2,11 @@ pub mod common;
 
 pub use chrono::offset::Utc;
 pub use common::{bakery_chain::*, setup::*, TestContext};
+use pretty_assertions::assert_eq;
 pub use rust_decimal::prelude::*;
 pub use rust_decimal_macros::dec;
-pub use sea_orm::{entity::*, query::*, DbErr, FromQueryResult};
+use sea_orm::{entity::*, query::*, DbErr, DerivePartialModel, FromQueryResult};
+use sea_query::{Expr, Func, SimpleExpr};
 pub use uuid::Uuid;
 
 // Run the test locally:
@@ -66,6 +68,7 @@ pub async fn left_join() {
         .filter(baker::Column::Name.contains("Baker 1"));
 
     let result = select
+        .clone()
         .into_model::<SelectResult>()
         .one(&ctx.db)
         .await
@@ -73,6 +76,28 @@ pub async fn left_join() {
         .unwrap();
     assert_eq!(result.name.as_str(), "Baker 1");
     assert_eq!(result.bakery_name, Some("SeaSide Bakery".to_string()));
+
+    #[derive(DerivePartialModel, FromQueryResult, Debug, PartialEq)]
+    #[sea_orm(entity = "Baker")]
+    struct PartialSelectResult {
+        name: String,
+        #[sea_orm(from_expr = "Expr::col((bakery::Entity, bakery::Column::Name))")]
+        bakery_name: Option<String>,
+        #[sea_orm(
+            from_expr = r#"SimpleExpr::FunctionCall(Func::upper(Expr::col((bakery::Entity, bakery::Column::Name))))"#
+        )]
+        bakery_name_upper: Option<String>,
+    }
+
+    let result = select
+        .into_partial_model::<PartialSelectResult>()
+        .one(&ctx.db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.name.as_str(), "Baker 1");
+    assert_eq!(result.bakery_name, Some("SeaSide Bakery".to_string()));
+    assert_eq!(result.bakery_name_upper, Some("SEASIDE BAKERY".to_string()));
 
     let select = baker::Entity::find()
         .left_join(bakery::Entity)
@@ -721,6 +746,84 @@ pub async fn linked() -> Result<(), DbErr> {
             name: "Kara".to_owned(),
             notes: Some("Loves all cakes".to_owned()),
         }]
+    );
+
+    let select_baker_with_customer = Baker::find()
+        .find_with_linked(baker::BakedForCustomer)
+        .order_by_asc(baker::Column::Id)
+        .order_by_asc(Expr::col((Alias::new("r4"), customer::Column::Id)));
+
+    assert_eq!(
+        select_baker_with_customer
+            .build(sea_orm::DatabaseBackend::MySql)
+            .to_string(),
+        [
+            "SELECT `baker`.`id` AS `A_id`,",
+            "`baker`.`name` AS `A_name`,",
+            "`baker`.`contact_details` AS `A_contact_details`,",
+            "`baker`.`bakery_id` AS `A_bakery_id`,",
+            "`r4`.`id` AS `B_id`,",
+            "`r4`.`name` AS `B_name`,",
+            "`r4`.`notes` AS `B_notes`",
+            "FROM `baker`",
+            "LEFT JOIN `cakes_bakers` AS `r0` ON `baker`.`id` = `r0`.`baker_id`",
+            "LEFT JOIN `cake` AS `r1` ON `r0`.`cake_id` = `r1`.`id`",
+            "LEFT JOIN `lineitem` AS `r2` ON `r1`.`id` = `r2`.`cake_id`",
+            "LEFT JOIN `order` AS `r3` ON `r2`.`order_id` = `r3`.`id`",
+            "LEFT JOIN `customer` AS `r4` ON `r3`.`customer_id` = `r4`.`id`",
+            "ORDER BY `baker`.`id` ASC, `r4`.`id` ASC"
+        ]
+        .join(" ")
+    );
+
+    assert_eq!(
+        select_baker_with_customer.all(&ctx.db).await?,
+        [
+            (
+                baker::Model {
+                    id: 1,
+                    name: "Baker Bob".into(),
+                    contact_details: serde_json::json!({
+                        "mobile": "+61424000000",
+                        "home": "0395555555",
+                        "address": "12 Test St, Testville, Vic, Australia",
+                    }),
+                    bakery_id: Some(1),
+                },
+                vec![customer::Model {
+                    id: 2,
+                    name: "Kara".into(),
+                    notes: Some("Loves all cakes".into()),
+                }]
+            ),
+            (
+                baker::Model {
+                    id: 2,
+                    name: "Baker Bobby".into(),
+                    contact_details: serde_json::json!({
+                        "mobile": "+85212345678",
+                    }),
+                    bakery_id: Some(1),
+                },
+                vec![
+                    customer::Model {
+                        id: 1,
+                        name: "Kate".into(),
+                        notes: Some("Loves cheese cake".into()),
+                    },
+                    customer::Model {
+                        id: 1,
+                        name: "Kate".into(),
+                        notes: Some("Loves cheese cake".into()),
+                    },
+                    customer::Model {
+                        id: 2,
+                        name: "Kara".into(),
+                        notes: Some("Loves all cakes".into()),
+                    },
+                ]
+            ),
+        ]
     );
 
     ctx.delete().await;

@@ -178,7 +178,7 @@ impl Column {
                 }
                 ColumnType::Array(column_type) => {
                     let column_type = write_col_def(column_type);
-                    quote! { ColumnType::Array(sea_orm::sea_query::SeaRc::new(#column_type)) }
+                    quote! { ColumnType::Array(RcOrArc::new(#column_type)) }
                 }
                 #[allow(unreachable_patterns)]
                 _ => unimplemented!(),
@@ -247,6 +247,13 @@ impl Column {
             }
         } else {
             quote! {}
+        }
+    }
+
+    pub fn get_inner_col_type(&self) -> &ColumnType {
+        match &self.col_type {
+            ColumnType::Array(inner_col_type) => inner_col_type.as_ref(),
+            _ => &self.col_type,
         }
     }
 }
